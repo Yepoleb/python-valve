@@ -48,7 +48,7 @@ class MessageField(object):
     validators = []
 
     def __init__(self, name, optional=False,
-                 default_value=None, validators=[]):
+                 default_value=None, validators=[], condition=None):
         """
             name -- used when decoding messages to set the key in the
                 returned dictionary
@@ -75,12 +75,12 @@ class MessageField(object):
         self.optional = optional
         self._value = default_value
         self.validators = self.__class__.validators + validators
+        self.condition = condition
 
     @property
     def default_value(self):
         if self.optional:
-            if self._value is not None:
-                return self._value
+            return self._value
         raise ValueError(
             "Field '{fname}' is not optional".format(fname=self.name))
 
@@ -123,7 +123,10 @@ class MessageField(object):
 
         field_size = struct.calcsize(self.format)
         if len(buffer) < field_size:
-            raise BufferExhaustedError
+            if self.optional:
+                return (self.default_value, buffer)
+            else:
+                raise BufferExhaustedError
         field_data = buffer[:field_size]
         left_overs = buffer[field_size:]
         try:
@@ -161,6 +164,10 @@ class ShortField(MessageField):
 
 class LongField(MessageField):
     fmt = "l"
+
+
+class LongLongField(MessageField):
+    fmt = "q"
 
 
 class FloatField(MessageField):
@@ -412,6 +419,8 @@ class Message(collections.Mapping):
         buffer = packet
         values = {}
         for field in cls.fields:
+            if field.condition is not None and not field.condition(values):
+                continue
             values[field.name], buffer = field.decode(buffer, values)
         return cls(buffer, **values)
 
@@ -465,8 +474,14 @@ class InfoResponse(Message):
         PlatformField("platform"),
         ByteField("password_protected"),  # BooleanField
         ByteField("vac_enabled"),  # BooleanField
-        StringField("version")
-        # TODO: EDF
+        StringField("version"),
+        ByteField("edf", True, 0x00),
+        ShortField("port", condition=lambda msg: msg["edf"] & 0x80),
+        LongLongField("steam_id", condition=lambda msg: msg["edf"] & 0x10),
+        ShortField("stv_port", condition=lambda msg: msg["edf"] & 0x40),
+        StringField("stv_name", condition=lambda msg: msg["edf"] & 0x40),
+        StringField("keywords", condition=lambda msg: msg["edf"] & 0x20),
+        LongLongField("game_id", condition=lambda msg: msg["edf"] & 0x01),
     )
 
 
